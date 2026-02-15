@@ -27,7 +27,13 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <string.h>     /* memset */
 
 #include <sys/ioctl.h>
+#if defined(__FreeBSD__)
+#include <sys/spigenio.h>
+#elif defined(__linux__)
 #include <linux/spi/spidev.h>
+#else
+#error "SPI header not available for this platform"
+#endif
 
 #include "loragw_spi.h"
 #include "loragw_aux.h"
@@ -82,7 +88,10 @@ int lgw_spi_open(const char * com_path, void **com_target_ptr) {
         return LGW_SPI_ERROR;
     }
 
-    /* setting SPI mode to 'mode 0' */
+    /* setting SPI mode to 'mode 0' and clock speed
+       - Linux uses SPI_IOC_* ioctls; FreeBSD exposes SPIGENIOC_* via <sys/spigenio.h>
+    */
+#if defined(__linux__)
     i = SPI_MODE_0;
     a = ioctl(dev, SPI_IOC_WR_MODE, &i);
     b = ioctl(dev, SPI_IOC_RD_MODE, &i);
@@ -124,6 +133,32 @@ int lgw_spi_open(const char * com_path, void **com_target_ptr) {
         close(dev);
         return LGW_SPI_ERROR;
     }
+#elif defined(__FreeBSD__)
+    i = 0; /* SPI mode 0 */
+    a = ioctl(dev, SPIGENIOC_SET_SPI_MODE, &i);
+    b = ioctl(dev, SPIGENIOC_GET_SPI_MODE, &i);
+    if ((a < 0) || (b < 0)) {
+        DEBUG_MSG("ERROR: SPI PORT FAIL TO SET SPI MODE\n");
+        close(dev);
+        free(spi_device);
+        return LGW_SPI_ERROR;
+    }
+
+    /* setting SPI max clk (in Hz) */
+    i = SPI_SPEED;
+    a = ioctl(dev, SPIGENIOC_SET_CLOCK_SPEED, &i);
+    b = ioctl(dev, SPIGENIOC_GET_CLOCK_SPEED, &i);
+    if ((a < 0) || (b < 0)) {
+        DEBUG_MSG("ERROR: SPI PORT FAIL TO SET MAX SPEED\n");
+        close(dev);
+        free(spi_device);
+        return LGW_SPI_ERROR;
+    }
+
+    /* FreeBSD spigenio does not expose LSB_FIRST or bits-per-word ioctls; skip them */
+#else
+#error "unimplemented"
+#endif
 
     *spi_device = dev;
     *com_target_ptr = (void *)spi_device;
@@ -163,8 +198,15 @@ int lgw_spi_w(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
     int spi_device;
     uint8_t out_buf[4];
     uint8_t command_size;
-    struct spi_ioc_transfer k;
     int a;
+#if defined(__linux__)
+    struct spi_ioc_transfer k;
+#elif defined(__FreeBSD__)
+    struct spigen_transfer st;
+    struct iovec cmd_iov, data_iov;
+#else
+#error "unimplemented"
+#endif
 
     /* check input variables */
     CHECK_NULL(com_target);
@@ -179,6 +221,7 @@ int lgw_spi_w(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
     command_size = 4;
 
     /* I/O transaction */
+#if defined(__linux__)
     memset(&k, 0, sizeof(k)); /* clear k */
     k.tx_buf = (unsigned long) out_buf;
     k.len = command_size;
@@ -186,8 +229,21 @@ int lgw_spi_w(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
     k.cs_change = 0;
     k.bits_per_word = 8;
     a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+#elif defined(__FreeBSD__)
+    memset(&st, 0, sizeof(st));
+    cmd_iov.iov_base = out_buf;
+    cmd_iov.iov_len = command_size;
+    data_iov.iov_base = NULL;
+    data_iov.iov_len = 0;
+    st.st_command = cmd_iov;
+    st.st_data = data_iov;
+    a = ioctl(spi_device, SPIGENIOC_TRANSFER, &st);
+#else
+#error "unimplemented"
+#endif
 
     /* determine return code */
+#if defined(__linux__)
     if (a != (int)k.len) {
         DEBUG_MSG("ERROR: SPI WRITE FAILURE\n");
         return LGW_SPI_ERROR;
@@ -195,6 +251,17 @@ int lgw_spi_w(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
         DEBUG_MSG("Note: SPI write success\n");
         return LGW_SPI_SUCCESS;
     }
+#elif defined(__FreeBSD__)
+    if (a < 0) {
+        DEBUG_MSG("ERROR: SPI WRITE FAILURE\n");
+        return LGW_SPI_ERROR;
+    } else {
+        DEBUG_MSG("Note: SPI write success\n");
+        return LGW_SPI_SUCCESS;
+    }
+#else
+#error "unimplemented"
+#endif
 }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -205,8 +272,13 @@ int lgw_spi_r(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
     uint8_t out_buf[5];
     uint8_t command_size;
     uint8_t in_buf[ARRAY_SIZE(out_buf)];
-    struct spi_ioc_transfer k;
     int a;
+#if defined(__linux__)
+    struct spi_ioc_transfer k;
+#elif defined(__FreeBSD__)
+    struct spigen_transfer st;
+    struct iovec cmd_iov, data_iov;
+#endif
 
     /* check input variables */
     CHECK_NULL(com_target);
@@ -223,14 +295,28 @@ int lgw_spi_r(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
     command_size = 5;
 
     /* I/O transaction */
+#if defined(__linux__)
     memset(&k, 0, sizeof(k)); /* clear k */
     k.tx_buf = (unsigned long) out_buf;
     k.rx_buf = (unsigned long) in_buf;
     k.len = command_size;
     k.cs_change = 0;
     a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+#elif defined(__FreeBSD__)
+    memset(&st, 0, sizeof(st));
+    cmd_iov.iov_base = out_buf;
+    cmd_iov.iov_len = command_size;
+    data_iov.iov_base = in_buf;
+    data_iov.iov_len = command_size;
+    st.st_command = cmd_iov;
+    st.st_data = data_iov;
+    a = ioctl(spi_device, SPIGENIOC_TRANSFER, &st);
+#else
+#error "unimplemented"
+#endif
 
     /* determine return code */
+#if defined(__linux__)
     if (a != (int)k.len) {
         DEBUG_MSG("ERROR: SPI READ FAILURE\n");
         return LGW_SPI_ERROR;
@@ -239,6 +325,18 @@ int lgw_spi_r(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
         *data = in_buf[command_size - 1];
         return LGW_SPI_SUCCESS;
     }
+#elif defined(__FreeBSD__)
+    if (a < 0) {
+        DEBUG_MSG("ERROR: SPI READ FAILURE\n");
+        return LGW_SPI_ERROR;
+    } else {
+        DEBUG_MSG("Note: SPI read success\n");
+        *data = in_buf[command_size - 1];
+        return LGW_SPI_SUCCESS;
+    }
+#else
+#error "unimplemented"
+#endif
 }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -269,7 +367,14 @@ int lgw_spi_wb(void *com_target, uint8_t spi_mux_target, uint16_t address, const
     int spi_device;
     uint8_t command[3];
     uint8_t command_size;
+#if defined(__linux__)
     struct spi_ioc_transfer k[2];
+#elif defined(__FreeBSD__)
+    struct spigen_transfer st;
+    struct iovec cmd_iov, data_iov;
+#else
+#error "unimplemented"
+#endif
     int size_to_do, chunk_size, offset;
     int byte_transfered = 0;
     int i;
@@ -292,17 +397,41 @@ int lgw_spi_wb(void *com_target, uint8_t spi_mux_target, uint16_t address, const
     size_to_do = size;
 
     /* I/O transaction */
+#if defined(__linux__)
     memset(&k, 0, sizeof(k)); /* clear k */
     k[0].tx_buf = (unsigned long) &command[0];
     k[0].len = command_size;
     k[0].cs_change = 0;
     k[1].cs_change = 0;
+#elif defined(__FreeBSD__)
+    /* FreeBSD: will set command/data iovecs per-chunk below */
+#else
+#error "unimplemented"
+#endif
     for (i=0; size_to_do > 0; ++i) {
         chunk_size = (size_to_do < LGW_BURST_CHUNK) ? size_to_do : LGW_BURST_CHUNK;
         offset = i * LGW_BURST_CHUNK;
+#if defined(__linux__)
         k[1].tx_buf = (unsigned long)(data + offset);
         k[1].len = chunk_size;
         byte_transfered += (ioctl(spi_device, SPI_IOC_MESSAGE(2), &k) - k[0].len );
+#elif defined(__FreeBSD__)
+        /* Use a single spigen transfer: command then data */
+        memset(&st, 0, sizeof(st));
+        cmd_iov.iov_base = &command[0];
+        cmd_iov.iov_len = command_size;
+        data_iov.iov_base = (void *)(data + offset);
+        data_iov.iov_len = chunk_size;
+        st.st_command = cmd_iov;
+        st.st_data = data_iov;
+        if (ioctl(spi_device, SPIGENIOC_TRANSFER, &st) < 0) {
+            byte_transfered += 0;
+        } else {
+            byte_transfered += chunk_size;
+        }
+#else
+#error "unimplemented"
+#endif
         DEBUG_PRINTF("BURST WRITE: to trans %d # chunk %d # transferred %d \n", size_to_do, chunk_size, byte_transfered);
         size_to_do -= chunk_size; /* subtract the quantity of data already transferred */
     }
@@ -324,7 +453,12 @@ int lgw_spi_rb(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8
     int spi_device;
     uint8_t command[4];
     uint8_t command_size;
+    #if defined(__linux__)
     struct spi_ioc_transfer k[2];
+    #elif defined(__FreeBSD__)
+    struct spigen_transfer st;
+    struct iovec cmd_iov, data_iov;
+    #endif
     int size_to_do, chunk_size, offset;
     int byte_transfered = 0;
     int i;
@@ -348,17 +482,41 @@ int lgw_spi_rb(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8
     size_to_do = size;
 
     /* I/O transaction */
+#if defined(__linux__)
     memset(&k, 0, sizeof(k)); /* clear k */
     k[0].tx_buf = (unsigned long) &command[0];
     k[0].len = command_size;
     k[0].cs_change = 0;
     k[1].cs_change = 0;
+#elif defined(__FreeBSD__)
+    /* FreeBSD: will set command/data iovecs per-chunk below */
+#else
+#error "unimplemented"
+#endif
     for (i=0; size_to_do > 0; ++i) {
         chunk_size = (size_to_do < LGW_BURST_CHUNK) ? size_to_do : LGW_BURST_CHUNK;
         offset = i * LGW_BURST_CHUNK;
+#if defined(__linux__)
         k[1].rx_buf = (unsigned long)(data + offset);
         k[1].len = chunk_size;
         byte_transfered += (ioctl(spi_device, SPI_IOC_MESSAGE(2), &k) - k[0].len );
+#elif defined(__FreeBSD__)
+        /* Use a single spigen transfer: command then data (readback) */
+        memset(&st, 0, sizeof(st));
+        cmd_iov.iov_base = &command[0];
+        cmd_iov.iov_len = command_size;
+        data_iov.iov_base = (void *)(data + offset);
+        data_iov.iov_len = chunk_size;
+        st.st_command = cmd_iov;
+        st.st_data = data_iov;
+        if (ioctl(spi_device, SPIGENIOC_TRANSFER, &st) < 0) {
+            byte_transfered += 0;
+        } else {
+            byte_transfered += chunk_size;
+        }
+#else
+#error "unimplemented"
+#endif
         DEBUG_PRINTF("BURST READ: to trans %d # chunk %d # transferred %d \n", size_to_do, chunk_size, byte_transfered);
         size_to_do -= chunk_size;  /* subtract the quantity of data already transferred */
     }

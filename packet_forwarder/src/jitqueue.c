@@ -25,6 +25,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 
 #include "trace.h"
 #include "jitqueue.h"
+#include "qsort_r.h"
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE MACROS ------------------------------------------------------- */
@@ -112,7 +113,7 @@ void jit_sort_queue(struct jit_queue_s *queue) {
     }
 
     MSG_DEBUG(DEBUG_JIT, "sorting queue in ascending order packet timestamp - queue size:%u\n", queue->num_pkt);
-    qsort_r(queue->nodes, queue->num_pkt, sizeof(queue->nodes[0]), compare, &counter);
+    QSORT_R(queue->nodes, queue->num_pkt, sizeof(queue->nodes[0]), compare, &counter);
     MSG_DEBUG(DEBUG_JIT, "sorting queue done - swapped:%d\n", counter);
 }
 

@@ -23,8 +23,14 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <errno.h>      /* errno */
 
 #include <sys/ioctl.h>
+#if defined(__linux__)
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
+#elif defined(__FreeBSD__)
+#include <dev/iicbus/iic.h>
+#else
+#error "I2C header not available for this platform"
+#endif
 
 #include "loragw_i2c.h"
 #include "loragw_aux.h"
@@ -70,10 +76,19 @@ int i2c_linuxdev_open(const char *path, uint8_t device_addr, int *i2c_fd) {
     }
 
     /* Setting I2C device mode to slave */
+#if defined(__linux__)
     if (ioctl(dev, I2C_SLAVE, device_addr) < 0) {
         DEBUG_PRINTF("ERROR: Failed to acquire bus access and/or talk to slave - %s\n", strerror(errno));
         return LGW_I2C_ERROR;
     }
+#elif defined(__FreeBSD__)
+    if (ioctl(dev, I2CSADDR, device_addr) < 0) {
+        DEBUG_PRINTF("ERROR: Failed to acquire bus access and/or talk to slave - %s\n", strerror(errno));
+        return LGW_I2C_ERROR;
+    }
+#else
+#error "unimplemented"
+#endif
 
     DEBUG_PRINTF("INFO: I2C port opened successfully (%s, 0x%02X)\n", path, device_addr);
     *i2c_fd = dev; /* return file descriptor index */
@@ -85,16 +100,31 @@ int i2c_linuxdev_open(const char *path, uint8_t device_addr, int *i2c_fd) {
 
 int i2c_linuxdev_read(int i2c_fd, uint8_t device_addr, uint8_t reg_addr, uint8_t *data) {
     uint8_t *inbuff, outbuff;
+#if defined(__linux__)
     struct i2c_rdwr_ioctl_data packets;
     struct i2c_msg messages[2];
+#elif defined(__FreeBSD__)
+    struct iic_rdwr_data packets;
+    struct iic_msg messages[2];
+#endif
 
     outbuff = reg_addr;
+#if defined(__linux__)
     messages[0].addr = device_addr;
     messages[0].flags= 0;
     messages[0].len = sizeof(outbuff);
     messages[0].buf = &outbuff;
+#elif defined(__FreeBSD__)
+    messages[0].slave = device_addr;
+    messages[0].flags= 0;
+    messages[0].len = sizeof(outbuff);
+    messages[0].buf = &outbuff;
+#else
+#error "unimplemented"
+#endif
 
     inbuff = data;
+#if defined(__linux__)
     messages[1].addr = device_addr;
     messages[1].flags = I2C_M_RD;
     messages[1].len = sizeof(*inbuff);
@@ -107,6 +137,22 @@ int i2c_linuxdev_read(int i2c_fd, uint8_t device_addr, uint8_t reg_addr, uint8_t
         DEBUG_PRINTF("ERROR: Read from I2C Device failed (%d, 0x%02x, 0x%02x) - %s\n", i2c_fd, device_addr, reg_addr, strerror(errno));
         return LGW_I2C_ERROR;
     }
+#elif defined(__FreeBSD__)
+    messages[1].slave = device_addr;
+    messages[1].flags = IIC_M_RD;
+    messages[1].len = sizeof(*inbuff);
+    messages[1].buf = inbuff;
+
+    packets.msgs = messages;
+    packets.nmsgs = 2;
+
+    if (ioctl(i2c_fd, I2CRDWR, &packets) < 0) {
+        DEBUG_PRINTF("ERROR: Read from I2C Device failed (%d, 0x%02x, 0x%02x) - %s\n", i2c_fd, device_addr, reg_addr, strerror(errno));
+        return LGW_I2C_ERROR;
+    }
+#else
+#error "unimplemented"
+#endif
 
     return LGW_I2C_SUCCESS;
 }
@@ -115,12 +161,17 @@ int i2c_linuxdev_read(int i2c_fd, uint8_t device_addr, uint8_t reg_addr, uint8_t
 
 int i2c_linuxdev_write(int i2c_fd, uint8_t device_addr, uint8_t reg_addr, uint8_t data) {
     unsigned char buff[2];
+#if defined(__linux__)
     struct i2c_rdwr_ioctl_data packets;
     struct i2c_msg messages[1];
+#elif defined(__FreeBSD__)
+    struct iic_rdwr_data packets;
+    struct iic_msg messages[1];
+#endif
 
     buff[0] = reg_addr;
     buff[1] = data;
-
+#if defined(__linux__)
     messages[0].addr = device_addr;
     messages[0].flags = 0;
     messages[0].len = sizeof(buff);
@@ -133,6 +184,22 @@ int i2c_linuxdev_write(int i2c_fd, uint8_t device_addr, uint8_t reg_addr, uint8_
         DEBUG_PRINTF("ERROR: Write to I2C Device failed (%d, 0x%02x, 0x%02x) - %s\n", i2c_fd, device_addr, reg_addr, strerror(errno));
         return LGW_I2C_ERROR;
     }
+#elif defined(__FreeBSD__)
+    messages[0].slave = device_addr;
+    messages[0].flags = 0;
+    messages[0].len = sizeof(buff);
+    messages[0].buf = buff;
+
+    packets.msgs = messages;
+    packets.nmsgs = 1;
+
+    if (ioctl(i2c_fd, I2CRDWR, &packets) < 0) {
+        DEBUG_PRINTF("ERROR: Write to I2C Device failed (%d, 0x%02x, 0x%02x) - %s\n", i2c_fd, device_addr, reg_addr, strerror(errno));
+        return LGW_I2C_ERROR;
+    }
+#else
+#error "unimplemented"
+#endif
 
     return LGW_I2C_SUCCESS;
 }
@@ -140,12 +207,17 @@ int i2c_linuxdev_write(int i2c_fd, uint8_t device_addr, uint8_t reg_addr, uint8_
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
 int i2c_linuxdev_write_buffer(int i2c_fd, uint8_t device_addr, uint8_t *buffer, uint8_t size) {
+#if defined(__linux__)
     struct i2c_rdwr_ioctl_data packets;
     struct i2c_msg messages[1];
+#elif defined(__FreeBSD__)
+    struct iic_rdwr_data packets;
+    struct iic_msg messages[1];
+#endif
 
     /* Check input parameters */
     CHECK_NULL(buffer);
-
+#if defined(__linux__)
     messages[0].addr = device_addr;
     messages[0].flags = 0;
     messages[0].len = size;
@@ -158,6 +230,22 @@ int i2c_linuxdev_write_buffer(int i2c_fd, uint8_t device_addr, uint8_t *buffer, 
         DEBUG_PRINTF("ERROR: Write buffer to I2C Device failed (%d, 0x%02x) - %s\n", i2c_fd, device_addr, strerror(errno));
         return LGW_I2C_ERROR;
     }
+#elif defined(__FreeBSD__)
+    messages[0].slave = device_addr;
+    messages[0].flags = 0;
+    messages[0].len = size;
+    messages[0].buf = buffer;
+
+    packets.msgs = messages;
+    packets.nmsgs = 1;
+
+    if (ioctl(i2c_fd, I2CRDWR, &packets) < 0) {
+        DEBUG_PRINTF("ERROR: Write buffer to I2C Device failed (%d, 0x%02x) - %s\n", i2c_fd, device_addr, strerror(errno));
+        return LGW_I2C_ERROR;
+    }
+#else
+#error "unimplemented"
+#endif
 
     return LGW_I2C_SUCCESS;
 }

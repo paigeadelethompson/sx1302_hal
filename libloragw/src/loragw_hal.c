@@ -25,6 +25,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 
 #define _GNU_SOURCE     /* needed for qsort_r to be defined */
 #include <stdlib.h>     /* qsort_r */
+#include "qsort_r.h"
 
 #include <stdint.h>     /* C99 types */
 #include <stdbool.h>    /* bool type */
@@ -417,7 +418,7 @@ static int merge_packets(struct lgw_pkt_rx_s * p, uint8_t * nb_pkt) {
     }
 
     /* Sort the packet array by ascending counter_us value */
-    qsort_r(p, cpt, sizeof(p[0]), compare_pkt_tmst, &counter_qsort_swap);
+    QSORT_R(p, cpt, sizeof(p[0]), compare_pkt_tmst, &counter_qsort_swap);
     DEBUG_PRINTF("%d elements swapped during sorting...\n", counter_qsort_swap);
 
     /* --------------------------------------------- */

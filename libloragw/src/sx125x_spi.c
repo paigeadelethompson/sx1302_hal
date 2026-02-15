@@ -21,7 +21,13 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <string.h>     /* memset */
 
 #include <sys/ioctl.h>
+#if defined(__FreeBSD__)
+#include <sys/spigenio.h>
+#elif defined(__linux__)
 #include <linux/spi/spidev.h>
+#else
+#error "SPI header not available for this platform"
+#endif
 
 #include "sx125x_spi.h"
 #include "loragw_spi.h"
@@ -64,7 +70,14 @@ int sx125x_spi_r(void *com_target, uint8_t spi_mux_target, uint8_t address, uint
     uint8_t out_buf[3];
     uint8_t command_size;
     uint8_t in_buf[ARRAY_SIZE(out_buf)];
+#if defined(__linux__)
     struct spi_ioc_transfer k;
+#elif defined(__FreeBSD__)
+    struct spigen_transfer st;
+    struct iovec cmd_iov, data_iov;
+#else
+#error "unimplemented"
+#endif
     int a;
 
     /* check input variables */
@@ -80,22 +93,46 @@ int sx125x_spi_r(void *com_target, uint8_t spi_mux_target, uint8_t address, uint
     command_size = 3;
 
     /* I/O transaction */
+#if defined(__linux__)
     memset(&k, 0, sizeof(k)); /* clear k */
     k.tx_buf = (unsigned long) out_buf;
     k.rx_buf = (unsigned long) in_buf;
     k.len = command_size;
     k.cs_change = 0;
     a = ioctl(com_device, SPI_IOC_MESSAGE(1), &k);
+#elif defined(__FreeBSD__)
+    memset(&st, 0, sizeof(st));
+    cmd_iov.iov_base = out_buf;
+    cmd_iov.iov_len = command_size;
+    data_iov.iov_base = in_buf;
+    data_iov.iov_len = command_size;
+    st.st_command = cmd_iov;
+    st.st_data = data_iov;
+    a = ioctl(com_device, SPIGENIOC_TRANSFER, &st);
+#else
+#error "unimplemented"
+#endif
 
     /* determine return code */
+#if defined(__linux__)
     if (a != (int)k.len) {
         DEBUG_MSG("ERROR: SPI READ FAILURE\n");
         return LGW_SPI_ERROR;
     } else {
-        //DEBUG_MSG("Note: SPI read success\n");
         *data = in_buf[command_size - 1];
         return LGW_SPI_SUCCESS;
     }
+#elif defined(__FreeBSD__)
+    if (a < 0) {
+        DEBUG_MSG("ERROR: SPI READ FAILURE\n");
+        return LGW_SPI_ERROR;
+    } else {
+        *data = in_buf[command_size - 1];
+        return LGW_SPI_SUCCESS;
+    }
+#else
+#error "unimplemented"
+#endif
 }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -104,7 +141,12 @@ int sx125x_spi_w(void *spi_target, uint8_t spi_mux_target, uint8_t address, uint
     int spi_device;
     uint8_t out_buf[3];
     uint8_t command_size;
+    #if defined(__linux__)
     struct spi_ioc_transfer k;
+    #elif defined(__FreeBSD__)
+    struct spigen_transfer st;
+    struct iovec cmd_iov, data_iov;
+    #endif
     int a;
 
     /* check input variables */
@@ -119,6 +161,7 @@ int sx125x_spi_w(void *spi_target, uint8_t spi_mux_target, uint8_t address, uint
     command_size = 3;
 
     /* I/O transaction */
+#if defined(__linux__)
     memset(&k, 0, sizeof(k)); /* clear k */
     k.tx_buf = (unsigned long) out_buf;
     k.len = command_size;
@@ -126,15 +169,37 @@ int sx125x_spi_w(void *spi_target, uint8_t spi_mux_target, uint8_t address, uint
     k.cs_change = 0;
     k.bits_per_word = 8;
     a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+#elif defined(__FreeBSD__)
+    memset(&st, 0, sizeof(st));
+    cmd_iov.iov_base = out_buf;
+    cmd_iov.iov_len = command_size;
+    data_iov.iov_base = NULL;
+    data_iov.iov_len = 0;
+    st.st_command = cmd_iov;
+    st.st_data = data_iov;
+    a = ioctl(spi_device, SPIGENIOC_TRANSFER, &st);
+#else
+#error "unimplemented"
+#endif
 
     /* determine return code */
+#if defined(__linux__)
     if (a != (int)k.len) {
         DEBUG_MSG("ERROR: SPI WRITE FAILURE\n");
         return LGW_SPI_ERROR;
     } else {
-        //DEBUG_MSG("Note: SPI write success\n");
         return LGW_SPI_SUCCESS;
     }
+#elif defined(__FreeBSD__)
+    if (a < 0) {
+        DEBUG_MSG("ERROR: SPI WRITE FAILURE\n");
+        return LGW_SPI_ERROR;
+    } else {
+        return LGW_SPI_SUCCESS;
+    }
+#else
+#error "unimplemented"
+#endif
 }
 
 /* --- EOF ------------------------------------------------------------------ */
